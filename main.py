@@ -1,317 +1,361 @@
-from PyQt5 import QtWidgets
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QDialog, QLineEdit
-from PyQt5.QtGui import QFont
-
-from mysql.connector import connect
-
 import sys
+from datetime import datetime
 
-FONT = QFont("Arial", 16, QFont.Bold)
-CONFIG = {
-    "host": "localhost",
-    "database": "exam",
-    "user": "root",
-    "password": ""
-}
+from PyQt5 import uic, QtWidgets
+from PyQt5.QtWidgets import QMainWindow, QWidget, QDialog, QApplication, QMessageBox, QLineEdit, QTableWidget
+import mysql.connector
 
 
-def connect_db():
-    try:
-        conn = connect(**CONFIG)
-        return conn, conn.cursor()
-    except Exception as err:
-        print("Ошибка подключения к бд: " + str(err))
+class Database(object):
+    def __init__(self):
+        self.__host = "localhost"
+        self.__user = "root"
+        self.__database = "exam"
+        self.__password = ""
+
+        self.conn, self.cur = None, None
+
+    def close(self):
+        self.conn.close()
+        self.cur.close()
+
+    def connect(self):
+        try:
+            self.conn = mysql.connector.connect(host=self.__host,
+                                                user=self.__user,
+                                                database=self.__database,
+                                                password=self.__password)
+            if self.conn.is_connected():
+                self.cur = self.conn.cursor()
+                return self.conn, self.cur
+            return False
+        except Exception as err:
+            print(f"Ошибка подключения к бд: {err}")
+            return False
+
+    def execute(self, sql, param=()):
+        self.conn, self.cur = self.connect()
+        try:
+            self.cur.execute(sql, param)
+            self.conn.commit()
+        except Exception as err:
+            self.conn.rollback()
+            raise ValueError(f"Ошибка при выполнении запроса: {err}")
+        finally:
+            self.close()
+
+    def query(self, sql, param):
+        self.conn, self.cur = self.connect()
+        try:
+            self.cur.execute(sql, param)
+            return self.cur.fetchall()
+        except Exception as err:
+            raise ValueError(f"Ошибка при выполнении запроса: {err}")
+        finally:
+            self.close()
 
 
-def create_label(win, text, x, y):
-    label = QtWidgets.QLabel(win)
-    label.setText(text)
-    label.move(x, y)
-    label.setFont(FONT)
-    label.adjustSize()
-    return label
+class User(Database):
+    def __init__(self):
+        super().__init__()
+        self.id = None
+        self.username = None
+        self.password = None
+
+    def check(self):
+        if self.id is not None:
+            if not isinstance(self.id, int):
+                raise TypeError("id должен быть целым числом (int)")
+            elif self.id < 0:
+                raise TypeError("id должен быть больше нуля")
+
+        if not isinstance(self.username, str):
+            raise TypeError("username должен быть строкой (str)")
+        elif not self.username.strip():
+            raise ValueError("username должен быть непустой строкой")
+
+        if not isinstance(self.password, str):
+            raise TypeError("password должен быть строкой (str)")
+        elif not self.password.strip():
+            raise ValueError("password должен быть непустой строкой")
+
+    def add(self, username, password, id_user=None):
+        self.id = id_user
+        self.username = username
+        self.password = password
+        self.check()
+
+        if self.id:
+            self.execute("insert into user(id, username, password) values(%s, %s, %s);",
+                         (self.id, self.username, self.password))
+        else:
+            self.execute("insert into user(username, password) values(%s, %s);",
+                         (self.username, self.password))
+
+    def select(self, username, password):
+        self.username = username
+        self.password = password
+        self.check()
+        return self.query("select * from user where username = %s and password = %s;", (username, password))
 
 
-def create_input(win, win_x, win_y, x, y, text=""):
-    edit = QtWidgets.QLineEdit(win)
-    edit.setText(text)
-    edit.move(win_x, win_y)
-    edit.setFont(FONT)
-    edit.resize(x, y)
-    return edit
+class Products(Database):
+    def __init__(self):
+        super().__init__()
+        self.id = None
+        self.name = None
+        self.date = None
+        self.price = None
 
+    def check(self):
+        if self.id is not None:
+            if not isinstance(self.id, int):
+                raise TypeError("id должен быть целым числом (int)")
+            elif self.id < 0:
+                raise ValueError("id должен быть больше или равен нулю")
 
-def create_button(win, win_x, win_y, x, y, text, command):
-    btn = QtWidgets.QPushButton(win)
-    btn.setText(text)
-    btn.move(win_x, win_y)
-    btn.resize(x, y)
-    btn.setFont(FONT)
-    btn.clicked.connect(command)
-    return btn
+        if not isinstance(self.name, str):
+            raise TypeError("name должно быть строкой (str)")
+        elif not self.name.strip():
+            raise ValueError("name не должно быть пустой строкой")
 
+        if not isinstance(self.date, str):
+            raise TypeError("date должно быть строкой (str)")
+        elif not self.date.strip():
+            raise ValueError("date не должно быть пустой строкой")
+        else:
+            try:
+                datetime.strptime(self.date, "%Y-%m-%d")
+            except ValueError:
+                raise ValueError("Дата должна быть в формате ГГГГ-ММ-ДД")
 
-def create_table(win, win_x, win_y, x, y, header):
-    table = QtWidgets.QTableWidget(win)
-    table.move(win_x, win_y)
-    table.resize(x, y)
-    table.setColumnCount(len(header))
-    table.setHorizontalHeaderLabels(header)
-    table.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
-    return table
+        if not isinstance(self.price, float):
+            raise TypeError("price должно быть числом (float)")
+        elif self.price <= 0:
+            raise ValueError("price должно быть больше нуля")
+
+    def add(self, name, date, price, id_user=None):
+        self.id = id_user
+        self.name = name
+        self.date = date
+        self.price = price
+        self.check()
+
+        if self.id:
+            self.execute("insert into products(id, name, date_save, price) values(%s, %s, %s, %s);",
+                         (self.id, self.name, self.date, self.price))
+        else:
+            self.execute("insert into products(name, date_save, price) values(%s, %s, %s);",
+                         (self.name, self.date, self.price))
+
+    def edit(self, name, date, price, new_id, last_id):
+        self.id = new_id
+        self.name = name
+        self.date = date
+        self.price = price
+        self.check()
+
+        self.execute("update products set id=%s, name=%s, date_save=%s, price=%s where id = %s;",
+                     (self.id, self.name, self.date, self.price, last_id))
+
+    def select(self, sql="select * from  products", param=()):
+        return self.query(sql, param)
+
+    def delete(self, id_delete):
+        if isinstance(id_delete, int):
+            self.execute("delete from products where id = %s;", (id_delete,))
+        else:
+            raise ValueError("id_delete должен быть числом (int)")
 
 
 def message(win, title, text):
-    QtWidgets.QMessageBox.information(win, title, text)
+    QMessageBox.information(win, title, text)
 
 
-class WindowEdit(QDialog):
-    def __init__(self, main_window, text_button):
+def date_to_str(date):
+    return str(datetime.strptime(date, "%d.%m.%Y").date())
+
+
+class EditDialog(QDialog):
+    def __init__(self, new_id=None, name=None, date=None, price=None):
         super().__init__()
-        self.setWindowTitle('Окно')
-        self.setGeometry(1400, 350, 300, 400)
-        self.labels, self.inputs = [], []
-        self.main_window = main_window
-        for i, text in enumerate(self.main_window.data_to_edit):
-            self.labels.append(create_label(self, str(text), 40, 20 + i * 80))
-            self.inputs.append(create_input(self, 40, 55 + i * 80, 220, 35, self.main_window.data_to_edit.get(text)))
+        uic.loadUi("dialog.ui", self)
 
-        self.button = create_button(self, 40, 340, 220, 50, text_button, lambda: self.send())
+        if new_id:
+            self.spinBox.setValue(new_id)
+        if name:
+            self.lineEdit_2.setText(name)
+        if date:
+            self.dateEdit.setDate(date)
+        if price:
+            self.doubleSpinBox.setValue(price)
 
-    def send(self):
+        self.pushButton.clicked.connect(lambda: self.do())
+        self.values = {"name": None, "date": None, "price": None, "id": None}
+
+    def do(self):
         try:
-            for i, text in enumerate(self.main_window.data_to_edit):
-                self.main_window.data_to_edit[text] = self.inputs[i].text()
+            self.values = {"name": self.lineEdit_2.text(),
+                           "date": date_to_str(self.dateEdit.text()),
+                           "price": float(self.doubleSpinBox.text().replace(',', '.')),
+                           "id": int(self.spinBox.text())
+                           }
             self.accept()
         except Exception as err:
-            message(self, "Ошибка", f"Ошибка при изменении внутренней переменной: {err}")
+            message(self, "Ошибка", str(err))
 
 
-class Window(QWidget):
+class Main(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle('Главная')
-        self.setGeometry(1350, 150, 400, 800)
+        uic.loadUi("main.ui", self)
 
-        self.data_to_edit = {"ID": None, "Имя": None, "Срок": None, "Цена": None}
+        column_width = 275
+        self.tableWidget.setColumnWidth(0, column_width)
+        self.tableWidget.setColumnWidth(1, column_width)
+        self.tableWidget.setColumnWidth(2, column_width)
+        self.tableWidget.setColumnWidth(3, column_width)
+        self.tableWidget.setEditTriggers(QTableWidget.NoEditTriggers)
 
-        self.label0 = create_label(self, "Главное окно", 140, 50)
-        self.button0 = create_button(self, 340, 30, 35, 35, "🗘", lambda: self.load())
-        self.table = create_table(self, 10, 100, 380, 300, [i for i in self.data_to_edit])
+        self.pushButton_3.clicked.connect(self.add)
+        self.pushButton_4.clicked.connect(self.edit)
+        self.pushButton_5.clicked.connect(self.delete)
 
-        self.label1 = create_label(self, "Имя", 50, 450)
-        self.input1 = create_input(self, 50, 480, 120, 35)
-        self.button1 = create_button(self, 50, 525, 120, 35, "Поиск", self.poisk1)
+        self.pushButton_6.clicked.connect(self.poisk1)
+        self.pushButton_7.clicked.connect(self.poisk2)
 
-        self.label2 = create_label(self, "Дата", 230, 450)
-        self.input2 = create_input(self, 230, 480, 120, 35)
-        self.button2 = create_button(self, 230, 525, 120, 35, "Поиск", self.poisk2)
+        self.pushButton_8.clicked.connect(lambda: self.load())
 
-        self.button_add = create_button(self, 50, 610, 300, 50, "Добавить", self.add)
-        self.button_edit = create_button(self, 50, 670, 300, 50, "Изменить ", self.edit)
-        self.button_delete = create_button(self, 50, 730, 300, 50, "Удалить", self.delete)
-
-        self.conn, self.cur = connect_db()
-
+        self.product = Products()
         self.load()
 
-    def load(self, request="select * from products", param=()):
-        self.conn, self.cur = connect_db()
-        try:
-            self.cur.execute(request, param)
-            data = self.cur.fetchall()
-            self.table.setRowCount(len(data))
+    def load_data(self, data):
+        self.tableWidget.setRowCount(len(data))
+        for row in range(len(data)):
+            for col, item in enumerate(data[row]):
+                self.tableWidget.setItem(row, col, QtWidgets.QTableWidgetItem(str(item)))
 
-            for row in range(len(data)):
-                for col, item in enumerate(data[row]):
-                    self.table.setItem(row, col, QtWidgets.QTableWidgetItem(str(item)))
-
-        except Exception as err:
-            message(self, "Ошибка", f"Ошибка загрузки данных: {str(err)}")
-        finally:
-            self.conn.close()
+    def load(self):
+        data = self.product.select()
+        self.load_data(data)
 
     def add(self):
-        self.data_to_edit = {"ID": None, "Имя": None, "Срок": None, "Цена": None}
-        window_add = WindowEdit(self, "Добавить")
-        if window_add.exec_():
-            self.conn, self.cur = connect_db()
+        window_edit = EditDialog()
+        if window_edit.exec_():
             try:
-                self.cur.execute("insert into products (id, name, date_save, price) values (%s, %s, %s, %s);",
-                                 (self.data_to_edit.get("ID"),
-                                  self.data_to_edit.get("Имя"),
-                                  self.data_to_edit.get("Срок"),
-                                  self.data_to_edit.get("Цена"))
-                                 )
-                self.conn.commit()
+                self.product.add(*window_edit.values.values())
+                message(self, "Успех", "Данные успешно добавлены")
                 self.load()
             except Exception as err:
-                self.conn.rollback()
-                message(self, "Ошибка", f"Ошибка добавления данных: {str(err)}")
-            finally:
-                self.conn.close()
+                message(self, "Ошибка", f"Произошла ошибка при заполнении данных: {err}")
+        del window_edit
 
     def edit(self):
-        current_row = self.table.currentRow()
-
-        if current_row >= 0:
-            id_remember = self.table.item(current_row, 0).text()
-            for ind, item in enumerate(self.data_to_edit):
-                self.data_to_edit[item] = self.table.item(current_row, ind).text()
-
-            window_edit = WindowEdit(self, "Изменить")
+        current_row = self.tableWidget.currentRow()
+        if current_row != -1:
+            last_id = int(self.tableWidget.item(current_row, 0).text())
+            last_name = self.tableWidget.item(current_row, 1).text()
+            last_date = datetime.strptime(self.tableWidget.item(current_row, 2).text(), "%Y-%m-%d")
+            last_price = float(self.tableWidget.item(current_row, 3).text())
+            window_edit = EditDialog(last_id, last_name, last_date, last_price)
             if window_edit.exec_():
-                self.conn, self.cur = connect_db()
-                try:
-                    self.cur.execute("update products set id=%s, name=%s, date_save=%s, price=%s where id=%s",
-                                     (self.data_to_edit.get("ID"),
-                                      self.data_to_edit.get("Имя"),
-                                      self.data_to_edit.get("Срок"),
-                                      self.data_to_edit.get("Цена"),
-                                      id_remember),
-                                     )
-                    self.conn.commit()
-                    self.load()
-                except Exception as err:
-                    self.conn.rollback()
-                    message(self, "Ошибка", f"Ошибка изменения данных: {str(err)}")
-                finally:
-                    self.conn.close()
+                self.product.edit(*window_edit.values.values(), last_id)
+                self.load()
+                message(self, "Успех", "Данные успешно изменены")
         else:
-            message(self, "Ошибка", "Выберите строку")
+            message(self, "Ошибка", "Выберите строку для изменения")
 
     def delete(self):
-        current_row = self.table.currentRow()
-        if current_row >= 0:
-            self.conn, self.cur = connect_db()
-            try:
-                id_product = self.table.item(current_row, 0).text()
-                self.cur.execute("delete from products where id = %s", (id_product,))
-                self.conn.commit()
-                self.load()
-            except Exception as err:
-                message(self, "Ошибка", f"Ошибка при удалении данных: {err}")
-            finally:
-                self.conn.close()
+        current_row = self.tableWidget.currentRow()
+        if current_row != -1:
+            id_del = self.tableWidget.item(current_row, 0).text()
+            self.product.delete(int(id_del))
+            self.load()
         else:
-            message(self, "Ошибка", "Выберите строку")
+            message(self, "Ошибка", "Выберите строку для удаления")
 
     def poisk1(self):
-        name = self.input1.text()
-        self.load("select * from products where name like %s", (f"%{name}%",))
+        text = self.lineEdit_3.text()
+        data = self.product.select("select * from products where name like %s;", (f"%{text}%",))
+        self.load_data(data)
 
     def poisk2(self):
-        date = self.input2.text()
-        self.load("select * from products where date_save >= %s", (date,))
+        date = self.dateEdit.text()
+        date = date_to_str(date)
+        data = self.product.select("select * from products where date_save >= %s;", (date,))
+        self.load_data(data)
 
 
-class Reg(QWidget):
-    def __init__(self, login_window=None):
-        super().__init__()
-
-        self.setWindowTitle('регистрация')
-        self.setGeometry(1350, 150, 400, 800)
-
-        self.label1 = create_label(self, "Логин", 160, 50)
-        self.input1 = create_input(self, 50, 120, 300, 35)
-        self.label2 = create_label(self, "Пароль", 160, 200)
-        self.input2 = create_input(self, 50, 270, 300, 35)
-        self.input2.setEchoMode(QLineEdit.Password)
-        self.label3 = create_label(self, "Повторите пароль", 100, 350)
-        self.input3 = create_input(self, 50, 420, 300, 35)
-        self.input3.setEchoMode(QLineEdit.Password)
-        self.button2 = create_button(self, 50, 570, 300, 50, "Зарегистрироваться", self.registr)
-        self.button1 = create_button(self, 50, 650, 300, 50, "Войти", self.login)
-
-        self.main_window = None
-        self.login_window = login_window
-
-        self.conn, self.cur = connect_db()
-
-    def login(self):
-        try:
-            self.hide()
-            if self.login_window:
-                self.login_window.show()
-        except Exception as err:
-            message(self, "Ошибка", f"Ошибка открытия окна: {str(err)}")
-
-    def registr(self):
-        try:
-            username, password, password1 = self.input1.text(), self.input2.text(), self.input3.text()
-
-            if password != password1:
-                message(self, "Неверный пароль", "Пароли не совпадают")
-                return
-
-            elif len(password) < 6:
-                message(self, "Неверный пароль", "Пароль слишком короткий")
-                return
-
-            else:
-                self.cur.execute("insert into user(username, password) values (%s, %s);",
-                                 (username, password))
-                self.conn.commit()
-                message(self, "Успешная регистрация", "Вы успешно зарегистрировались")
-                self.hide()
-                if self.login_window:
-                    self.login_window.show()
-
-        except Exception as err:
-            self.conn.rollback()
-            message(self, "Ошибка", f"Ошибка в приложении {str(err)}")
-        finally:
-            self.conn.close()
-
-
-class Login(QMainWindow):
+class Reg(QDialog):
     def __init__(self):
         super().__init__()
+        uic.loadUi("registr.ui", self)
 
-        self.setWindowTitle('вход')
-        self.setGeometry(1350, 150, 400, 800)
+        self.pushButton.clicked.connect(self.reg)
+        self.pushButton_2.clicked.connect(self.back)
 
-        self.label1 = create_label(self, "Логин", 160, 50)
-        self.input1 = create_input(self, 50, 120, 300, 35)
-        self.label2 = create_label(self, "Пароль", 160, 200)
-        self.input2 = create_input(self, 50, 270, 300, 35)
-        self.input2.setEchoMode(QLineEdit.Password)
+        self.lineEdit_2.setEchoMode(QLineEdit.Password)
+        self.lineEdit_3.setEchoMode(QLineEdit.Password)
 
-        self.button1 = create_button(self, 50, 570, 300, 50, "Войти", self.login)
-        self.button2 = create_button(self, 50, 650, 300, 50, "Зарегистрироваться", self.registr)
+    def back(self):
+        self.accept()
 
-        self.main_window = None
+    def reg(self):
+        login = self.lineEdit.text()
+        password = self.lineEdit_2.text()
+        password_2 = self.lineEdit_3.text()
+
+        if password != password_2:
+            message(self, "Ошибка", "Пароли должны совпадать!")
+            return
+
+        if len(password) < 6:
+            message(self, "Ошибка", "Пароль должен быть длиннее 6 символов!")
+            return
+        try:
+            person = User()
+            person.add(login, password)
+            del person
+
+            message(self, "Успех", "Вы успешно зарегистрировались")
+            self.accept()
+        except Exception as err:
+            message(self, "Ошибка", f"Произошла ошибка при регистрации: {err}")
+
+
+class Login(QWidget):
+    def __init__(self):
+        super().__init__()
+        uic.loadUi("login.ui", self)
+
+        self.pushButton.clicked.connect(self.login)
+        self.pushButton_2.clicked.connect(self.reg)
+
+        self.lineEdit_2.setEchoMode(QLineEdit.Password)
+
         self.reg_window = None
-
-        self.conn, self.cur = connect_db()
+        self.main_window = None
 
     def login(self):
-        try:
-            username, password = self.input1.text(), self.input2.text()
-            self.cur.execute("select id from user where username = %s and password = %s", (username, password))
-            id_user = self.cur.fetchone()
+        login = self.lineEdit.text()
+        password = self.lineEdit_2.text()
 
-            if id_user:
-                message(self, "Успешный вход", "Добро пожаловать")
-                self.hide()
-                self.main_window = Window()
-                self.main_window.show()
-            else:
-                message(self, "Ошибка", "Неверный логин или пароль")
+        person = User()
+        res = person.select(login, password)
+        del person
 
-        except Exception as err:
-            message(self, "Ошибка", f"Ошибка в приложении {str(err)}")
-        finally:
-            self.conn.close()
+        if res:
+            self.main_window = Main()
+            message(self, "Вход", "Добро пожаловать")
+            self.close()
+            self.main_window.show()
+        else:
+            message(self, "Ошибка", "Неверный логин или пароль")
 
-    def registr(self):
-        try:
-            self.reg_window = Reg(self)
-            self.hide()
-            self.reg_window.show()
-        except Exception as err:
-            message(self, "Ошибка", f"Ошибка открытия окна: {str(err)}")
+    def reg(self):
+        self.reg_window = Reg()
+        self.reg_window.exec_()
 
 
 if __name__ == "__main__":
